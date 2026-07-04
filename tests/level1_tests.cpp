@@ -153,3 +153,28 @@ TEST(Level1, Nrm2) {
     cudaFree(d_x);
     cudaFree(d_y);
 }
+
+TEST(Level1, Asum) {
+    std::vector<real_t> h_x = random_vector<real_t>(n);
+    std::vector<complex_t> h_y = random_vector<complex_t>(n);
+
+    real_t* d_x = nullptr;
+    complex_t* d_y = nullptr;
+    ASSERT_EQ(cudaMalloc(&d_x, n * sizeof(real_t)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_y, n * sizeof(complex_t)), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(d_x, h_x.data(), n * sizeof(real_t), cudaMemcpyHostToDevice), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(d_y, h_y.data(), n * sizeof(complex_t), cudaMemcpyHostToDevice), cudaSuccess);
+
+    Vector<real_t> x{d_x, n, 1};
+    Vector<complex_t> y{d_y, n, 1};
+
+    real_t result = asum(x);
+    real_t resultc = asum(y);
+    real_t ref = ref_asum(n, h_x.data(), 1);
+    real_t refc = ref_asum(n, h_y.data(), 1);
+    EXPECT_NEAR(result, ref, std::abs(ref) * 1e-4);
+    EXPECT_NEAR(resultc, refc, std::abs(refc) * 1e-4);
+
+    cudaFree(d_x);
+    cudaFree(d_y);
+}

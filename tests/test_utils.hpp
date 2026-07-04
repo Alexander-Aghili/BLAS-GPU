@@ -30,6 +30,10 @@ float snrm2_(const int* n, const float* x, const int* incx);
 double dnrm2_(const int* n, const double* x, const int* incx);
 float scnrm2_(const int* n, const cuda::std::complex<float>* x, const int* incx);
 double dznrm2_(const int* n, const cuda::std::complex<double>* x, const int* incx);
+float sasum_(const int* n, const float* x, const int* incx);
+double dasum_(const int* n, const double* x, const int* incx);
+float scasum_(const int* n, const cuda::std::complex<float>* x, const int* incx);
+double dzasum_(const int* n, const cuda::std::complex<double>* x, const int* incx);
 }
 
 template <typename T = real_t>
@@ -110,5 +114,21 @@ inline real_t ref_nrm2(int size, const complex_t* x, int incx) {
     return dznrm2_(&size, x, &incx);
 #else
     return scnrm2_(&size, x, &incx);
+#endif
+}
+
+inline real_t ref_asum(int size, const real_t* x, int incx) {
+#ifdef DOUBLE_PRECISION
+    return dasum_(&size, x, &incx);
+#else
+    return sasum_(&size, x, &incx);
+#endif
+}
+
+inline real_t ref_asum(int size, const complex_t* x, int incx) {
+#ifdef DOUBLE_PRECISION
+    return dzasum_(&size, x, &incx);
+#else
+    return scasum_(&size, x, &incx);
 #endif
 }

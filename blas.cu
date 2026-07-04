@@ -226,3 +226,46 @@ real_t nrm2(const Vector<T>& x) {
 template real_t nrm2<real_t>(const Vector<real_t>&);
 template real_t nrm2<complex_t>(const Vector<complex_t>&);
 
+
+template <typename T>
+__global__ void asum_kernel(const Vector<T> x, real_t* result) {
+    const T* __restrict__ xp = x.data;
+    for (long i = blockIdx.x * (long)blockDim.x + threadIdx.x; i < x.n; i+= (long)gridDim.x * blockDim.x) {
+	T v = xp[i * x.inc];
+	if constexpr (cuda::std::is_same_v<T, complex_t>) {
+	    atomicAdd(result, cuda::std::abs(v.real()) + cuda::std::abs(v.imag()));
+	} else {
+	    atomicAdd(result, cuda::std::abs(v));
+	}
+    }
+}
+
+template <typename T>
+real_t asum(const Vector<T>& x) {
+    if (x.n <= 0) return 0;
+
+    int min_grid = 0, block = 0;
+    GET_MAX_POTENTIAL_BLOCKS_SIZE(min_grid, block, asum_kernel<T>);
+
+    const int grid = (x.n + block - 1) / block;
+    real_t* d_result = nullptr;
+    CUDA_ERROR_CHECK(cudaMalloc(&d_result, sizeof(real_t)));
+    CUDA_ERROR_CHECK(cudaMemset(d_result, 0, sizeof(real_t)));
+    asum_kernel<<<grid, block>>>(x, d_result);
+    CUDA_ERROR_CHECK(cudaGetLastError());
+    real_t result = 0;
+    CUDA_ERROR_CHECK(cudaMemcpy(&result, d_result, sizeof(real_t), cudaMemcpyDeviceToHost));
+    CUDA_ERROR_CHECK(cudaFree(d_result));
+    return result;
+}
+
+template real_t asum<real_t>(const Vector<real_t>&);
+template real_t asum<complex_t>(const Vector<complex_t>&);
+
+
+template <typename T>
+__global__ void iamax_kernel(const Vector<T> x, int* result) {
+    const T* __restrict__ xp = x.data;
+}
+
+
