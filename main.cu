@@ -1,4 +1,4 @@
-#include "blas.cuh"
+#include "blas.hpp"
 
 #include <cuda_runtime.h>
 

@@ -6,8 +6,8 @@
 #include <cuda_runtime.h>
 
 
-#include "types.cuh"
-#include "macros.cuh"
+#include "types.hpp"
+#include "macros.hpp"
 
 //Level 1 BLAS
 

@@ -1,0 +1,114 @@
+#pragma once
+
+#include <gtest/gtest.h>
+
+#include <cuda_runtime.h>
+
+#include <cmath>
+#include <random>
+#include <type_traits>
+#include <vector>
+
+#include "blas.hpp"
+
+extern "C" {
+float sdot_(const int* n, const float* x, const int* incx, const float* y, const int* incy);
+double ddot_(const int* n, const double* x, const int* incx, const double* y, const int* incy);
+void scopy_(const int* n, const float* x, const int* incx, float* y, const int* incy);
+void dcopy_(const int* n, const double* x, const int* incx, double* y, const int* incy);
+void sswap_(const int* n, float* x, const int* incx, float* y, const int* incy);
+void dswap_(const int* n, double* x, const int* incx, double* y, const int* incy);
+cuda::std::complex<float> cdotu_(const int* n, const cuda::std::complex<float>* x, const int* incx,
+                                 const cuda::std::complex<float>* y, const int* incy);
+cuda::std::complex<double> zdotu_(const int* n, const cuda::std::complex<double>* x, const int* incx,
+                                  const cuda::std::complex<double>* y, const int* incy);
+cuda::std::complex<float> cdotc_(const int* n, const cuda::std::complex<float>* x, const int* incx,
+                                 const cuda::std::complex<float>* y, const int* incy);
+cuda::std::complex<double> zdotc_(const int* n, const cuda::std::complex<double>* x, const int* incx,
+                                  const cuda::std::complex<double>* y, const int* incy);
+float snrm2_(const int* n, const float* x, const int* incx);
+double dnrm2_(const int* n, const double* x, const int* incx);
+float scnrm2_(const int* n, const cuda::std::complex<float>* x, const int* incx);
+double dznrm2_(const int* n, const cuda::std::complex<double>* x, const int* incx);
+}
+
+template <typename T = real_t>
+inline std::vector<T> random_vector(int size) {
+    static std::mt19937 gen(12345);
+    std::uniform_real_distribution<real_t> dist(0, 10);
+    std::vector<T> v(size);
+    for (auto& e : v) {
+        if constexpr (std::is_same_v<T, complex_t>) {
+            e = complex_t(dist(gen), dist(gen));
+        } else {
+            e = dist(gen);
+        }
+    }
+    return v;
+}
+
+template <typename T>
+inline void verify_vector(const Vector<T>& v, const std::vector<T>& expected) {
+    ASSERT_EQ(static_cast<size_t>(v.n), expected.size());
+    std::vector<T> host(static_cast<size_t>(v.n) * v.inc);
+    ASSERT_EQ(cudaMemcpy(host.data(), v.data, host.size() * sizeof(T), cudaMemcpyDeviceToHost), cudaSuccess);
+    for (int i = 0; i < v.n; ++i) {
+        EXPECT_EQ(host[static_cast<size_t>(i) * v.inc], expected[i]) << "mismatch at index " << i;
+    }
+}
+
+inline void ref_copy(int size, const real_t* x, int incx, real_t* y, int incy) {
+#ifdef DOUBLE_PRECISION
+    dcopy_(&size, x, &incx, y, &incy);
+#else
+    scopy_(&size, x, &incx, y, &incy);
+#endif
+}
+
+inline void ref_swap(int size, real_t* x, int incx, real_t* y, int incy) {
+#ifdef DOUBLE_PRECISION
+    dswap_(&size, x, &incx, y, &incy);
+#else
+    sswap_(&size, x, &incx, y, &incy);
+#endif
+}
+
+inline real_t ref_dot(int size, const real_t* x, int incx, const real_t* y, int incy) {
+#ifdef DOUBLE_PRECISION
+    return ddot_(&size, x, &incx, y, &incy);
+#else
+    return sdot_(&size, x, &incx, y, &incy);
+#endif
+}
+
+inline complex_t ref_dotu(int size, const complex_t* x, int incx, const complex_t* y, int incy) {
+#ifdef DOUBLE_PRECISION
+    return zdotu_(&size, x, &incx, y, &incy);
+#else
+    return cdotu_(&size, x, &incx, y, &incy);
+#endif
+}
+
+inline complex_t ref_dotc(int size, const complex_t* x, int incx, const complex_t* y, int incy) {
+#ifdef DOUBLE_PRECISION
+    return zdotc_(&size, x, &incx, y, &incy);
+#else
+    return cdotc_(&size, x, &incx, y, &incy);
+#endif
+}
+
+inline real_t ref_nrm2(int size, const real_t* x, int incx) {
+#ifdef DOUBLE_PRECISION
+    return dnrm2_(&size, x, &incx);
+#else
+    return snrm2_(&size, x, &incx);
+#endif
+}
+
+inline real_t ref_nrm2(int size, const complex_t* x, int incx) {
+#ifdef DOUBLE_PRECISION
+    return dznrm2_(&size, x, &incx);
+#else
+    return scnrm2_(&size, x, &incx);
+#endif
+}

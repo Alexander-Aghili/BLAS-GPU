@@ -13,13 +13,23 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 find_package(CUDAToolkit REQUIRED)
 
-add_executable(blas
-  main.cpp
-  main.cu
+add_library(blas_lib STATIC
   blas.cu
 )
 
+target_include_directories(blas_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(blas_lib PUBLIC CUDA::cudart)
+
+add_executable(blas
+  main.cpp
+  main.cu
+)
+
 target_link_libraries(blas PRIVATE
-  CUDA::cudart
+  blas_lib
   CUDA::cublas
 )
+
+enable_testing()
+add_subdirectory(tests)

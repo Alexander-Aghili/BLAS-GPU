@@ -3,9 +3,11 @@
 ## Level 1
 - [x] axpy
 - [x] scal
-- [ ] copy, swap — fix `inc` indexing, finish host wrappers
-- [ ] reduction skeleton
-- [ ] dot, dotu, dotc, nrm2, asum (reuse reduction skeleton)
+- [x] copy, swap
+- [x] dot, dotu, dotc (atomicAdd first pass)
+- [x] nrm2 (atomicAdd sum of squares, sqrt on host)
+- [ ] asum
+- [ ] reduction skeleton (block reduction + one atomic per block) — replace per-element atomicAdd in dot/dotu/dotc/nrm2/asum
 - [ ] iamax (reduction with index tracking)
 - [ ] rotg, rot, rotmg, rotm
 
@@ -35,7 +37,7 @@
 ## Tests
 Each test targets a specific failure mode:
 
-- **Reference check** (vs cuBLAS and CPU loop) — wrong math, wrong op variant
+- **Reference check** (vs Netlib reference BLAS, linked in tests/CMakeLists.txt) — wrong math, wrong op variant
 - **Strided views** (`inc` = 2, 3; matrix row/diagonal as vector) — kernels ignoring `inc`
 - **Mixed strides** (x.inc != y.inc in one call) — shared loop stride bugs
 - **Submatrix views** (`ld` > rows) — indexing that assumes ld == rows
