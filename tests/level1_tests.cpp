@@ -1,7 +1,5 @@
 #include "test_utils.hpp"
 
-constexpr int n = 4096;
-
 TEST(Level1, Copy) {
     std::vector<real_t> h_x = random_vector(n);
 

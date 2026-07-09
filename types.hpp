@@ -2,6 +2,7 @@
 
 #include <cuda_runtime.h>
 #include <cuda/std/complex>
+#include <cuda/std/type_traits>
 
 //CUDA Type Definitions for Basic Linear Algebra Subprograms (BLAS)
 
@@ -31,3 +32,27 @@ struct Matrix {
 };
 
 
+template <typename T>
+struct NoTransAt {
+  __device__ T operator()(const Matrix<T>& A, long i, long j) const {
+      return A.data[i + j * A.ld];
+  }
+};
+
+template <typename T>
+struct TransAt {
+  __device__ T operator()(const Matrix<T>& A, long i, long j) const {
+      return A.data[j + i * A.ld];
+  }
+};
+
+template <typename T>
+struct ConjTransAt {
+  __device__ T operator()(const Matrix<T>& A, long i, long j) const {
+      if constexpr (cuda::std::is_same_v<T, complex_t>) {
+          return conj(A.data[j + i * A.ld]);
+      } else {
+          return A.data[j + i * A.ld];
+      }
+  }
+};

@@ -263,9 +263,49 @@ template real_t asum<real_t>(const Vector<real_t>&);
 template real_t asum<complex_t>(const Vector<complex_t>&);
 
 
-template <typename T>
-__global__ void iamax_kernel(const Vector<T> x, int* result) {
-    const T* __restrict__ xp = x.data;
+template <typename T, typename Access>
+__device__ T row_dot(const Matrix<T>& A, const Vector<T>& x, long i, long len, Access at)
+{
+  T sum = 0;
+  for (long j = 0; j < len; j++)
+      sum += at(A, i, j) * x.data[j * x.inc];
+  return sum;
 }
 
+template <typename T, typename Access>
+__global__ void gemv_kernel(T alpha, const Matrix<T> A, const Vector<T> x, T beta, Vector<T> y, long m, long n, Access at) {
+    T* __restrict__ yp = y.data;
+    for (long i = blockIdx.x * (long)blockDim.x + threadIdx.x; i < m; i+= (long)gridDim.x * blockDim.x) {
+	T sum = row_dot(A, x, i, n, at);
+	yp[i * y.inc] = alpha * sum + (beta == T(0) ? T(0) : beta * yp[i * y.inc]);
+    }
+}
+
+
+template <typename T>
+void gemv(const char* trans, T alpha, const Matrix<T>& A, const Vector<T>& x, T beta, Vector<T>& y) {
+    if (A.rows <= 0 || A.cols <= 0 || (alpha == T(0) && beta == T(1))) return;
+
+    const bool notrans = (trans[0] == 'N' || trans[0] == 'n');
+    const long m = notrans ? A.rows : A.cols;
+    const long n = notrans ? A.cols : A.rows;
+
+    int min_grid = 0, block = 0;
+    GET_MAX_POTENTIAL_BLOCKS_SIZE(min_grid, block, (gemv_kernel<T, NoTransAt<T>>));
+
+    const int grid = (m + block - 1) / block;
+    if (notrans) {
+	gemv_kernel<<<grid, block>>>(alpha, A, x, beta, y, m, n, NoTransAt<T>());
+    } else if (trans[0] == 'T' || trans[0] == 't') {
+	gemv_kernel<<<grid, block>>>(alpha, A, x, beta, y, m, n, TransAt<T>());
+    } else if (trans[0] == 'C' || trans[0] == 'c') {
+	gemv_kernel<<<grid, block>>>(alpha, A, x, beta, y, m, n, ConjTransAt<T>());
+    }
+    CUDA_ERROR_CHECK(cudaGetLastError());
+}
+
+template void gemv<real_t>(const char*, real_t, const Matrix<real_t>&, const Vector<real_t>&, real_t, Vector<real_t>&);
+template void gemv<complex_t>(const char*, complex_t, const Matrix<complex_t>&, const Vector<complex_t>&, complex_t, Vector<complex_t>&);
+
+    
 

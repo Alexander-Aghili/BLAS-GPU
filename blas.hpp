@@ -58,7 +58,7 @@ void rotg(complex_t& a, complex_t& b, real_t& c, complex_t& s);
 //rot: apply a Givens rotation to vectors x and y; c and s are real
 //even for complex vectors (srot/drot, csrot/zdrot)
 template <typename T>
-void rot(Vector<T>& x, Vector<T>& y, real_t c, real_t s);
+void rot(Vector<T>& x, Vector<T>& y, real_t c, T s);
 
 //rotmg: generate a modified Givens rotation (real only in BLAS)
 //d1, d2, x1 are updated in place; param[5] receives the rotation
@@ -71,8 +71,8 @@ void rotm(Vector<real_t>& x, Vector<real_t>& y, const real_t param[5]);
 //Level 2 BLAS
 //
 //gemv: y = alpha * A * x + beta * y
-template <typename T> 
-void gemv(const char* trans, T alpha, const Matrix<T>& A, const Vector<T>& x, T beta, const Vector<T>& y);
+template <typename T>
+void gemv(const char* trans, T alpha, const Matrix<T>& A, const Vector<T>& x, T beta, Vector<T>& y);
 
 //hemv: y = alpha * A * x + beta * y
 void hemv(const char* uplo, complex_t& alpha, const Matrix<complex_t>& A, const Vector<complex_t>& x, complex_t beta, const Vector<complex_t>& y);
