@@ -40,6 +40,12 @@ void sgemv_(const char* trans, const int* m, const int* n, const float* alpha, c
             const float* x, const int* incx, const float* beta, float* y, const int* incy);
 void dgemv_(const char* trans, const int* m, const int* n, const double* alpha, const double* A, const int* lda,
             const double* x, const int* incx, const double* beta, double* y, const int* incy);
+void chemv_(const char* uplo, const int* m, const cuda::std::complex<float>* alpha, const cuda::std::complex<float>* A,
+            const int* lda, const cuda::std::complex<float>* x, const int* incx, const cuda::std::complex<float>* beta,
+            cuda::std::complex<float>* y, const int* incy);
+void zhemv_(const char* uplo, const int* m, const cuda::std::complex<double>* alpha, const cuda::std::complex<double>* A,
+            const int* lda, const cuda::std::complex<double>* x, const int* incx, const cuda::std::complex<double>* beta,
+            cuda::std::complex<double>* y, const int* incy);
 }
 
 template <typename T = real_t>
@@ -57,7 +63,7 @@ inline std::vector<T> random_vector(int size) {
     return v;
 }
 
-template <typename T = real_t>
+template <typename T>
 inline Matrix<T> random_matrix(T* data, int rows, int cols) {
     static std::mt19937 gen(12345);
     std::uniform_real_distribution<real_t> dist(0, 10);
@@ -75,6 +81,25 @@ inline Matrix<T> random_matrix(T* data, int rows, int cols) {
 }
 
 template <typename T>
+inline Matrix<T> random_matrix_hermitian(T* data, int rows, int cols) {
+    static std::mt19937 gen(12345);
+    std::uniform_real_distribution<real_t> dist(0, 10);
+    Matrix<T> m{data, rows, cols, rows};
+    for (int j = 0; j < cols; ++j) {
+        for (int i = 0; i <= j; ++i) {
+            if constexpr (std::is_same_v<T, complex_t>) {
+                m.data[i + j * m.ld] = (i == j) ? complex_t(dist(gen), 0) : complex_t(dist(gen), dist(gen));
+                m.data[j + i * m.ld] = conj(m.data[i + j * m.ld]);
+            } else {
+                m.data[i + j * m.ld] = dist(gen);
+                m.data[j + i * m.ld] = m.data[i + j * m.ld];
+            }
+        }
+    }
+    return m;
+}
+
+template <typename T>
 inline void verify_vector(const Vector<T>& v, const std::vector<T>& expected) {
     ASSERT_EQ(static_cast<size_t>(v.n), expected.size());
     std::vector<T> host(static_cast<size_t>(v.n) * v.inc);
@@ -84,13 +109,21 @@ inline void verify_vector(const Vector<T>& v, const std::vector<T>& expected) {
     }
 }
 
-inline void verify_vector_near(const Vector<real_t>& v, const std::vector<real_t>& expected, real_t rel_tol) {
+template <typename T>
+inline void verify_vector_near(const Vector<T>& v, const std::vector<T>& expected, real_t rel_tol) {
     ASSERT_EQ(static_cast<size_t>(v.n), expected.size());
-    std::vector<real_t> host(static_cast<size_t>(v.n) * v.inc);
-    ASSERT_EQ(cudaMemcpy(host.data(), v.data, host.size() * sizeof(real_t), cudaMemcpyDeviceToHost), cudaSuccess);
+    std::vector<T> host(static_cast<size_t>(v.n) * v.inc);
+    ASSERT_EQ(cudaMemcpy(host.data(), v.data, host.size() * sizeof(T), cudaMemcpyDeviceToHost), cudaSuccess);
     for (int i = 0; i < v.n; ++i) {
-        EXPECT_NEAR(host[static_cast<size_t>(i) * v.inc], expected[i], std::abs(expected[i]) * rel_tol)
-            << "mismatch at index " << i;
+        const T& got = host[static_cast<size_t>(i) * v.inc];
+        const T& want = expected[i];
+        if constexpr (std::is_same_v<T, complex_t>) {
+            const real_t tol = abs(want) * rel_tol;
+            EXPECT_NEAR(got.real(), want.real(), tol) << "real mismatch at index " << i;
+            EXPECT_NEAR(got.imag(), want.imag(), tol) << "imag mismatch at index " << i;
+        } else {
+            EXPECT_NEAR(got, want, std::abs(want) * rel_tol) << "mismatch at index " << i;
+        }
     }
 }
 
@@ -171,5 +204,13 @@ inline void ref_gemv(const char* trans, int m, int n, real_t alpha, const real_t
     dgemv_(trans, &m, &n, &alpha, A, &lda, x, &incx, &beta, y, &incy);
 #else
     sgemv_(trans, &m, &n, &alpha, A, &lda, x, &incx, &beta, y, &incy);
+#endif
+}
+
+inline void ref_hemv(const char* uplo, int m, complex_t alpha, const complex_t* A, int lda, const complex_t* x, int incx, complex_t beta, complex_t* y, int incy) {
+#ifdef DOUBLE_PRECISION
+    zhemv_(uplo, &m, &alpha, A, &lda, x, &incx, &beta, y, &incy);
+#else
+    chemv_(uplo, &m, &alpha, A, &lda, x, &incx, &beta, y, &incy);
 #endif
 }

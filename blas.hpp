@@ -74,10 +74,10 @@ void rotm(Vector<real_t>& x, Vector<real_t>& y, const real_t param[5]);
 template <typename T>
 void gemv(const char* trans, T alpha, const Matrix<T>& A, const Vector<T>& x, T beta, Vector<T>& y);
 
-//hemv: y = alpha * A * x + beta * y
-void hemv(const char* uplo, complex_t& alpha, const Matrix<complex_t>& A, const Vector<complex_t>& x, complex_t beta, const Vector<complex_t>& y);
+//hemv: y = alpha * A^* * x + beta * y
+void hemv(const char* uplo, complex_t alpha, const Matrix<complex_t>& A, const Vector<complex_t>& x, complex_t beta, const Vector<complex_t>& y);
 
-//symv: y = alpha * A * x + beta * y
+//symv: y = alpha * A^T * x + beta * y
 void symv(const char* uplo, real_t alpha, const Matrix<real_t>& A, const Vector<real_t>& x, real_t beta, const Vector<real_t>& y);
 
 //trmv: x=A*x 

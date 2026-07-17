@@ -56,3 +56,27 @@ struct ConjTransAt {
       }
   }
 };
+
+template <typename T>
+struct UpperAt {
+    __device__ T operator()(const Matrix<T>& A, long i, long j) const {
+	if constexpr (cuda::std::is_same_v<T, complex_t>) {
+	    if (i == j) return T(A.data[i + i * A.ld].real(), 0);
+	    return (j > i) ? A.data[i + j * A.ld] : conj(A.data[j + i * A.ld]);
+	} else {
+	    return (j >= i) ? A.data[i + j * A.ld] : A.data[j + i * A.ld];
+	}
+    }
+};
+
+template <typename T>
+struct LowerAt {
+    __device__ T operator()(const Matrix<T>& A, long i, long j) const {
+	if constexpr (cuda::std::is_same_v<T, complex_t>) {
+	    if (i == j) return T(A.data[i + i * A.ld].real(), 0);
+	    return (j < i) ? A.data[i + j * A.ld] : conj(A.data[j + i * A.ld]);
+	} else {
+	    return (j <= i) ? A.data[i + j * A.ld] : A.data[j + i * A.ld];
+	}
+    }
+};
