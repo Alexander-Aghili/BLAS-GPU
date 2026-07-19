@@ -337,3 +337,31 @@ void hemv(const char* uplo, complex_t alpha, const Matrix<complex_t>& A, const V
     CUDA_ERROR_CHECK(cudaGetLastError());
 }
 
+template <typename Access>
+__global__ void symv_kernel(real_t alpha, const Matrix<real_t> A, const Vector<real_t> x, real_t beta, const Vector<real_t> y, Access at) {
+    real_t* __restrict__ yp = y.data;
+    for (long i = blockIdx.x * (long)blockDim.x + threadIdx.x; i < A.rows; i+= (long)gridDim.x * blockDim.x) {
+	real_t sum = row_dot(A, x, i, A.cols, at);
+	yp[i * y.inc] = alpha * sum + (beta == real_t(0) ? real_t(0) : beta * yp[i * y.inc]);
+    }
+}
+    
+void symv(const char* uplo, real_t alpha, const Matrix<real_t>& A, const Vector<real_t>& x, real_t beta, const Vector<real_t>& y) {
+    if (A.rows <= 0 || A.cols <= 0 || (alpha == real_t(0) && beta == real_t(1))) return;
+
+    const bool upper = (uplo[0] == 'U' || uplo[0] == 'u');
+    const long m = upper ? A.rows : A.cols;
+    const long n = upper ? A.cols : A.rows;
+
+    int min_grid = 0, block = 0;
+    GET_MAX_POTENTIAL_BLOCKS_SIZE(min_grid, block, (hemv_kernel<UpperAt<real_t>>));
+
+    const int grid = (m + block - 1) / block;
+    if (upper) {
+	hemv_kernel<<<grid, block>>>(alpha, A, x, beta, y, UpperAt<real_t>());
+    } else {
+	hemv_kernel<<<grid, block>>>(alpha, A, x, beta, y, LowerAt<real_t>());
+    }
+
+    CUDA_ERROR_CHECK(cudaGetLastError());
+}

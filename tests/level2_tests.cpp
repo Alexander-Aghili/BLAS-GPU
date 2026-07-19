@@ -98,3 +98,36 @@ TEST(Level2, Hemv) {
     cudaFree(d_x);
     cudaFree(d_y);
 }
+
+TEST(Level2, Symv) {
+    std::vector<real_t> h_A(static_cast<size_t>(n) * n);
+    random_matrix_hermitian<real_t>(h_A.data(), n, n);
+    std::vector<real_t> h_x = random_vector<real_t>(n);
+    std::vector<real_t> h_y = random_vector<real_t>(n);
+
+    real_t* d_A = nullptr;
+    real_t* d_x = nullptr;
+    real_t* d_y = nullptr;
+    ASSERT_EQ(cudaMalloc(&d_A, h_A.size() * sizeof(real_t)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_x, n * sizeof(real_t)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_y, n * sizeof(real_t)), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(d_A, h_A.data(), h_A.size() * sizeof(real_t), cudaMemcpyHostToDevice), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(d_x, h_x.data(), n * sizeof(real_t), cudaMemcpyHostToDevice), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(d_y, h_y.data(), n * sizeof(real_t), cudaMemcpyHostToDevice), cudaSuccess);
+
+    Matrix<real_t> A{d_A, n, n, n};
+    Vector<real_t> x{d_x, n, 1};
+    Vector<real_t> y{d_y, n, 1};
+
+    hemv("U", complex_t(1), A, x, complex_t(0), y);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    std::vector<complex_t> h_y_ref = h_y;
+    ref_hemv("U", n, complex_t(1), h_A.data(), n, h_x.data(), 1, complex_t(0), h_y_ref.data(), 1);
+
+    verify_vector_near(y, h_y_ref, 1e-4);
+
+    cudaFree(d_A);
+    cudaFree(d_x);
+    cudaFree(d_y);
+}
