@@ -119,11 +119,11 @@ TEST(Level2, Symv) {
     Vector<real_t> x{d_x, n, 1};
     Vector<real_t> y{d_y, n, 1};
 
-    hemv("U", complex_t(1), A, x, complex_t(0), y);
+    symv("U", real_t(1), A, x, real_t(0), y);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
-    std::vector<complex_t> h_y_ref = h_y;
-    ref_hemv("U", n, complex_t(1), h_A.data(), n, h_x.data(), 1, complex_t(0), h_y_ref.data(), 1);
+    std::vector<real_t> h_y_ref = h_y;
+    ref_symv("U", n, real_t(1), h_A.data(), n, h_x.data(), 1, real_t(0), h_y_ref.data(), 1);
 
     verify_vector_near(y, h_y_ref, 1e-4);
 

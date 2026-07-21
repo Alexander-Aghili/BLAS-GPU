@@ -354,14 +354,69 @@ void symv(const char* uplo, real_t alpha, const Matrix<real_t>& A, const Vector<
     const long n = upper ? A.cols : A.rows;
 
     int min_grid = 0, block = 0;
-    GET_MAX_POTENTIAL_BLOCKS_SIZE(min_grid, block, (hemv_kernel<UpperAt<real_t>>));
+    GET_MAX_POTENTIAL_BLOCKS_SIZE(min_grid, block, (symv_kernel<UpperAt<real_t>>));
 
     const int grid = (m + block - 1) / block;
     if (upper) {
-	hemv_kernel<<<grid, block>>>(alpha, A, x, beta, y, UpperAt<real_t>());
+	symv_kernel<<<grid, block>>>(alpha, A, x, beta, y, UpperAt<real_t>());
     } else {
-	hemv_kernel<<<grid, block>>>(alpha, A, x, beta, y, LowerAt<real_t>());
+	symv_kernel<<<grid, block>>>(alpha, A, x, beta, y, LowerAt<real_t>());
     }
 
     CUDA_ERROR_CHECK(cudaGetLastError());
 }
+
+template <typename T, typename AccessA, typename AccessB>
+__global__ void gemm_kernel(T alpha, const Matrix<T> A, const Matrix<T> B, T beta, Matrix<T> C, long m, long n, long k, AccessA at_a, AccessB at_b) {
+    T* __restrict__ cp = C.data;
+    for (long i = blockIdx.x * (long)blockDim.x + threadIdx.x; i < m; i += (long)gridDim.x * blockDim.x) {
+	for (long j = blockIdx.y * (long)blockDim.y + threadIdx.y; j < n; j += (long)gridDim.y * blockDim.y) {
+	    T sum = 0;
+	    for (long l = 0; l < k; l++) {
+		sum += at_a(A, i, l) * at_b(B, l, j);
+	    }
+	    cp[i + j * C.ld] = alpha * sum + (beta == T(0) ? T(0) : beta * cp[i + j * C.ld]);
+	}
+    }
+}
+
+template <typename T, typename AccessA>
+static void gemm_launch(const char* transb, T alpha, const Matrix<T>& A, const Matrix<T>& B, T beta, Matrix<T>& C, long m, long n, long k, dim3 grid, dim3 block, AccessA at_a) {
+    if (transb[0] == 'N' || transb[0] == 'n') {
+	gemm_kernel<<<grid, block>>>(alpha, A, B, beta, C, m, n, k, at_a, NoTransAt<T>());
+    } else if (transb[0] == 'T' || transb[0] == 't') {
+	gemm_kernel<<<grid, block>>>(alpha, A, B, beta, C, m, n, k, at_a, TransAt<T>());
+    } else if (transb[0] == 'C' || transb[0] == 'c') {
+	gemm_kernel<<<grid, block>>>(alpha, A, B, beta, C, m, n, k, at_a, ConjTransAt<T>());
+    }
+}
+
+template <typename T>
+void gemm(const char* transa, const char* transb, T alpha, const Matrix<T>& A, const Matrix<T>& B, T beta, Matrix<T>& C) {
+    const bool na = (transa[0] == 'N' || transa[0] == 'n');
+    const long m = na ? A.rows : A.cols;
+    const long k = na ? A.cols : A.rows;
+    const long n = (transb[0] == 'N' || transb[0] == 'n') ? B.cols : B.rows;
+
+    if (m <= 0 || n <= 0 || (alpha == T(0) && beta == T(1))) return;
+
+    const dim3 block(16, 16);
+    long gx = (m + block.x - 1) / block.x;
+    long gy = (n + block.y - 1) / block.y;
+    //temporary cap on grid size
+    if (gx > 65535) gx = 65535;
+    if (gy > 65535) gy = 65535;
+    const dim3 grid((unsigned)gx, (unsigned)gy);
+
+    if (na) {
+	gemm_launch(transb, alpha, A, B, beta, C, m, n, k, grid, block, NoTransAt<T>());
+    } else if (transa[0] == 'T' || transa[0] == 't') {
+	gemm_launch(transb, alpha, A, B, beta, C, m, n, k, grid, block, TransAt<T>());
+    } else if (transa[0] == 'C' || transa[0] == 'c') {
+	gemm_launch(transb, alpha, A, B, beta, C, m, n, k, grid, block, ConjTransAt<T>());
+    }
+    CUDA_ERROR_CHECK(cudaGetLastError());
+}
+
+template void gemm<real_t>(const char*, const char*, real_t, const Matrix<real_t>&, const Matrix<real_t>&, real_t, Matrix<real_t>&);
+template void gemm<complex_t>(const char*, const char*, complex_t, const Matrix<complex_t>&, const Matrix<complex_t>&, complex_t, Matrix<complex_t>&);

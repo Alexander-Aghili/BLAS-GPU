@@ -46,6 +46,22 @@ void chemv_(const char* uplo, const int* m, const cuda::std::complex<float>* alp
 void zhemv_(const char* uplo, const int* m, const cuda::std::complex<double>* alpha, const cuda::std::complex<double>* A,
             const int* lda, const cuda::std::complex<double>* x, const int* incx, const cuda::std::complex<double>* beta,
             cuda::std::complex<double>* y, const int* incy);
+void ssymv_(const char* uplo, const int* m, const float* alpha, const float* A, const int* lda,
+            const float* x, const int* incx, const float* beta, float* y, const int* incy);
+void dsymv_(const char* uplo, const int* m, const double* alpha, const double* A, const int* lda,
+            const double* x, const int* incx, const double* beta, double* y, const int* incy);
+void sgemm_(const char* transa, const char* transb, const int* m, const int* n, const int* k, const float* alpha,
+            const float* A, const int* lda, const float* B, const int* ldb, const float* beta, float* C, const int* ldc);
+void dgemm_(const char* transa, const char* transb, const int* m, const int* n, const int* k, const double* alpha,
+            const double* A, const int* lda, const double* B, const int* ldb, const double* beta, double* C, const int* ldc);
+void cgemm_(const char* transa, const char* transb, const int* m, const int* n, const int* k,
+            const cuda::std::complex<float>* alpha, const cuda::std::complex<float>* A, const int* lda,
+            const cuda::std::complex<float>* B, const int* ldb, const cuda::std::complex<float>* beta,
+            cuda::std::complex<float>* C, const int* ldc);
+void zgemm_(const char* transa, const char* transb, const int* m, const int* n, const int* k,
+            const cuda::std::complex<double>* alpha, const cuda::std::complex<double>* A, const int* lda,
+            const cuda::std::complex<double>* B, const int* ldb, const cuda::std::complex<double>* beta,
+            cuda::std::complex<double>* C, const int* ldc);
 }
 
 template <typename T = real_t>
@@ -212,5 +228,31 @@ inline void ref_hemv(const char* uplo, int m, complex_t alpha, const complex_t* 
     zhemv_(uplo, &m, &alpha, A, &lda, x, &incx, &beta, y, &incy);
 #else
     chemv_(uplo, &m, &alpha, A, &lda, x, &incx, &beta, y, &incy);
+#endif
+}
+
+inline void ref_symv(const char* uplo, int m, real_t alpha, const real_t* A, int lda, const real_t* x, int incx, real_t beta, real_t* y, int incy) {
+#ifdef DOUBLE_PRECISION
+    dsymv_(uplo, &m, &alpha, A, &lda, x, &incx, &beta, y, &incy);
+#else
+    ssymv_(uplo, &m, &alpha, A, &lda, x, &incx, &beta, y, &incy);
+#endif
+}
+
+inline void ref_gemm(const char* transa, const char* transb, int m, int n, int k, real_t alpha, const real_t* A, int lda,
+                     const real_t* B, int ldb, real_t beta, real_t* C, int ldc) {
+#ifdef DOUBLE_PRECISION
+    dgemm_(transa, transb, &m, &n, &k, &alpha, A, &lda, B, &ldb, &beta, C, &ldc);
+#else
+    sgemm_(transa, transb, &m, &n, &k, &alpha, A, &lda, B, &ldb, &beta, C, &ldc);
+#endif
+}
+
+inline void ref_gemm(const char* transa, const char* transb, int m, int n, int k, complex_t alpha, const complex_t* A, int lda,
+                     const complex_t* B, int ldb, complex_t beta, complex_t* C, int ldc) {
+#ifdef DOUBLE_PRECISION
+    zgemm_(transa, transb, &m, &n, &k, &alpha, A, &lda, B, &ldb, &beta, C, &ldc);
+#else
+    cgemm_(transa, transb, &m, &n, &k, &alpha, A, &lda, B, &ldb, &beta, C, &ldc);
 #endif
 }
