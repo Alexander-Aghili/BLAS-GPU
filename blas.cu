@@ -4,6 +4,57 @@
 
 #include <cuda/std/type_traits>
 
+static long span_of(int n, int inc) {
+    return n > 0 ? 1 + (long)(n - 1) * (inc < 0 ? -inc : inc) : 0;
+}
+
+static long offset_of(int n, int inc) {
+    return (inc < 0 && n > 0) ? (long)(n - 1) * -inc : 0;
+}
+
+template <typename T>
+static T* device_copy_in(const T* host, long count) {
+    T* dev = nullptr;
+    CUDA_ERROR_CHECK(cudaMalloc(&dev, (count > 0 ? count : 1) * sizeof(T)));
+    if (count > 0)
+	CUDA_ERROR_CHECK(cudaMemcpy(dev, host, count * sizeof(T), cudaMemcpyHostToDevice));
+    return dev;
+}
+
+template <typename T>
+static Vector<T> stage_vector(const Vector<T>& v, T*& slab) {
+    const long off = offset_of(v.n, v.inc);
+    slab = device_copy_in(v.data - off, span_of(v.n, v.inc));
+    return Vector<T>{slab + off, v.n, v.inc};
+}
+
+template <typename T>
+static void unstage_vector(const Vector<T>& v, T* slab) {
+    const long count = span_of(v.n, v.inc);
+    if (count > 0)
+	CUDA_ERROR_CHECK(cudaMemcpy(v.data - offset_of(v.n, v.inc), slab, count * sizeof(T), cudaMemcpyDeviceToHost));
+    CUDA_ERROR_CHECK(cudaFree(slab));
+}
+
+template <typename T>
+static Matrix<T> stage_matrix(const Matrix<T>& A, T*& slab) {
+    slab = device_copy_in(A.data, (long)A.ld * A.cols);
+    return Matrix<T>{slab, A.rows, A.cols, A.ld};
+}
+
+template <typename T>
+static void unstage_matrix(const Matrix<T>& A, T* slab) {
+    const long count = (long)A.ld * A.cols;
+    if (count > 0)
+	CUDA_ERROR_CHECK(cudaMemcpy(A.data, slab, count * sizeof(T), cudaMemcpyDeviceToHost));
+    CUDA_ERROR_CHECK(cudaFree(slab));
+}
+
+template <typename T>
+static void release(T* slab) {
+    CUDA_ERROR_CHECK(cudaFree(slab));
+}
+
 //Level 1 BLAS
 
 //axpy: y = alpha * x + y
@@ -24,9 +75,16 @@ void axpy(T alpha, const Vector<T>& x, Vector<T>& y) {
     int min_grid = 0, block = 0;
     GET_MAX_POTENTIAL_BLOCKS_SIZE(min_grid, block, axpy_kernel<T>);
 
+    T* sx = nullptr;
+    T* sy = nullptr;
+    const Vector<T> dx = stage_vector(x, sx);
+    const Vector<T> dy = stage_vector(y, sy);
+
     const int grid = (x.n + block - 1) / block;
-    axpy_kernel<<<grid, block>>>(alpha, x, y);
+    axpy_kernel<<<grid, block>>>(alpha, dx, dy);
     CUDA_ERROR_CHECK(cudaGetLastError());
+    unstage_vector(y, sy);
+    release(sx);
 }
 
 template void axpy<real_t>(real_t, const Vector<real_t>&, Vector<real_t>&);
@@ -48,9 +106,13 @@ void scal(T alpha, Vector<T>& y) {
     int min_grid = 0, block = 0;
     GET_MAX_POTENTIAL_BLOCKS_SIZE(min_grid, block, scal_kernel<T>);
 
+    T* sy = nullptr;
+    const Vector<T> dy = stage_vector(y, sy);
+
     const int grid = (y.n + block - 1) / block;
-    scal_kernel<<<grid, block>>>(alpha, y);
+    scal_kernel<<<grid, block>>>(alpha, dy);
     CUDA_ERROR_CHECK(cudaGetLastError());
+    unstage_vector(y, sy);
 }
 
 template void scal<real_t>(real_t, Vector<real_t>&);
@@ -72,9 +134,16 @@ void copy(const Vector<T>& x, Vector<T>& y) {
     int min_grid = 0, block = 0;
     GET_MAX_POTENTIAL_BLOCKS_SIZE(min_grid, block, copy_kernel<T>);
 
+    T* sx = nullptr;
+    T* sy = nullptr;
+    const Vector<T> dx = stage_vector(x, sx);
+    const Vector<T> dy = stage_vector(y, sy);
+
     const int grid = (x.n + block - 1) / block;
-    copy_kernel<<<grid, block>>>(x, y);
+    copy_kernel<<<grid, block>>>(dx, dy);
     CUDA_ERROR_CHECK(cudaGetLastError());
+    unstage_vector(y, sy);
+    release(sx);
 }
 
 template void copy<real_t>(const Vector<real_t>&, Vector<real_t>&);
@@ -98,9 +167,16 @@ void swap(Vector<T>& x, Vector<T>& y) {
     int min_grid = 0, block = 0;
     GET_MAX_POTENTIAL_BLOCKS_SIZE(min_grid, block, swap_kernel<T>);
 
+    T* sx = nullptr;
+    T* sy = nullptr;
+    const Vector<T> dx = stage_vector(x, sx);
+    const Vector<T> dy = stage_vector(y, sy);
+
     const int grid = (x.n + block - 1) / block;
-    swap_kernel<<<grid, block>>>(x, y);
+    swap_kernel<<<grid, block>>>(dx, dy);
     CUDA_ERROR_CHECK(cudaGetLastError());
+    unstage_vector(x, sx);
+    unstage_vector(y, sy);
 }
 
 template void swap<real_t>(Vector<real_t>&, Vector<real_t>&);
@@ -121,15 +197,22 @@ real_t dot(const Vector<real_t>& x, const Vector<real_t>& y) {
     int min_grid = 0, block = 0;
     GET_MAX_POTENTIAL_BLOCKS_SIZE(min_grid, block, dot_kernel);
 
+    real_t* sx = nullptr;
+    real_t* sy = nullptr;
+    const Vector<real_t> dx = stage_vector(x, sx);
+    const Vector<real_t> dy = stage_vector(y, sy);
+
     const int grid = (x.n + block - 1) / block;
     real_t* d_result = nullptr;
     CUDA_ERROR_CHECK(cudaMalloc(&d_result, sizeof(real_t)));
     CUDA_ERROR_CHECK(cudaMemset(d_result, 0, sizeof(real_t)));
-    dot_kernel<<<grid, block>>>(x, y, d_result);
+    dot_kernel<<<grid, block>>>(dx, dy, d_result);
     CUDA_ERROR_CHECK(cudaGetLastError());
     real_t result = 0;
     CUDA_ERROR_CHECK(cudaMemcpy(&result, d_result, sizeof(real_t), cudaMemcpyDeviceToHost));
     CUDA_ERROR_CHECK(cudaFree(d_result));
+    release(sx);
+    release(sy);
     return result;
 }
 
@@ -150,15 +233,22 @@ complex_t dotu(const Vector<complex_t>& x, const Vector<complex_t>& y) {
     int min_grid = 0, block = 0;
     GET_MAX_POTENTIAL_BLOCKS_SIZE(min_grid, block, dotu_kernel);
 
+    complex_t* sx = nullptr;
+    complex_t* sy = nullptr;
+    const Vector<complex_t> dx = stage_vector(x, sx);
+    const Vector<complex_t> dy = stage_vector(y, sy);
+
     const int grid = (x.n + block - 1) / block;
     complex_t* d_result = nullptr;
     CUDA_ERROR_CHECK(cudaMalloc(&d_result, sizeof(complex_t)));
     CUDA_ERROR_CHECK(cudaMemset(d_result, 0, sizeof(complex_t)));
-    dotu_kernel<<<grid, block>>>(x, y, d_result);
+    dotu_kernel<<<grid, block>>>(dx, dy, d_result);
     CUDA_ERROR_CHECK(cudaGetLastError());
     complex_t result = 0;
     CUDA_ERROR_CHECK(cudaMemcpy(&result, d_result, sizeof(complex_t), cudaMemcpyDeviceToHost));
     CUDA_ERROR_CHECK(cudaFree(d_result));
+    release(sx);
+    release(sy);
     return result;
 }
 
@@ -179,15 +269,22 @@ complex_t dotc(const Vector<complex_t>& x, const Vector<complex_t>& y) {
     int min_grid = 0, block = 0;
     GET_MAX_POTENTIAL_BLOCKS_SIZE(min_grid, block, dotc_kernel);
 
+    complex_t* sx = nullptr;
+    complex_t* sy = nullptr;
+    const Vector<complex_t> dx = stage_vector(x, sx);
+    const Vector<complex_t> dy = stage_vector(y, sy);
+
     const int grid = (x.n + block - 1) / block;
     complex_t* d_result = nullptr;
     CUDA_ERROR_CHECK(cudaMalloc(&d_result, sizeof(complex_t)));
     CUDA_ERROR_CHECK(cudaMemset(d_result, 0, sizeof(complex_t)));
-    dotc_kernel<<<grid, block>>>(x, y, d_result);
+    dotc_kernel<<<grid, block>>>(dx, dy, d_result);
     CUDA_ERROR_CHECK(cudaGetLastError());
     complex_t result = 0;
     CUDA_ERROR_CHECK(cudaMemcpy(&result, d_result, sizeof(complex_t), cudaMemcpyDeviceToHost));
     CUDA_ERROR_CHECK(cudaFree(d_result));
+    release(sx);
+    release(sy);
     return result;
 }
 
@@ -211,15 +308,19 @@ real_t nrm2(const Vector<T>& x) {
     int min_grid = 0, block = 0;
     GET_MAX_POTENTIAL_BLOCKS_SIZE(min_grid, block, nrm2_kernel<T>);
 
+    T* sx = nullptr;
+    const Vector<T> dx = stage_vector(x, sx);
+
     const int grid = (x.n + block - 1) / block;
     real_t* d_result = nullptr;
     CUDA_ERROR_CHECK(cudaMalloc(&d_result, sizeof(real_t)));
     CUDA_ERROR_CHECK(cudaMemset(d_result, 0, sizeof(real_t)));
-    nrm2_kernel<<<grid, block>>>(x, d_result);
+    nrm2_kernel<<<grid, block>>>(dx, d_result);
     CUDA_ERROR_CHECK(cudaGetLastError());
     real_t result = 0;
     CUDA_ERROR_CHECK(cudaMemcpy(&result, d_result, sizeof(real_t), cudaMemcpyDeviceToHost));
     CUDA_ERROR_CHECK(cudaFree(d_result));
+    release(sx);
     return std::sqrt(result);
 }
 
@@ -247,15 +348,19 @@ real_t asum(const Vector<T>& x) {
     int min_grid = 0, block = 0;
     GET_MAX_POTENTIAL_BLOCKS_SIZE(min_grid, block, asum_kernel<T>);
 
+    T* sx = nullptr;
+    const Vector<T> dx = stage_vector(x, sx);
+
     const int grid = (x.n + block - 1) / block;
     real_t* d_result = nullptr;
     CUDA_ERROR_CHECK(cudaMalloc(&d_result, sizeof(real_t)));
     CUDA_ERROR_CHECK(cudaMemset(d_result, 0, sizeof(real_t)));
-    asum_kernel<<<grid, block>>>(x, d_result);
+    asum_kernel<<<grid, block>>>(dx, d_result);
     CUDA_ERROR_CHECK(cudaGetLastError());
     real_t result = 0;
     CUDA_ERROR_CHECK(cudaMemcpy(&result, d_result, sizeof(real_t), cudaMemcpyDeviceToHost));
     CUDA_ERROR_CHECK(cudaFree(d_result));
+    release(sx);
     return result;
 }
 
@@ -293,15 +398,25 @@ void gemv(const char* trans, T alpha, const Matrix<T>& A, const Vector<T>& x, T 
     int min_grid = 0, block = 0;
     GET_MAX_POTENTIAL_BLOCKS_SIZE(min_grid, block, (gemv_kernel<T, NoTransAt<T>>));
 
+    T* sa = nullptr;
+    T* sx = nullptr;
+    T* sy = nullptr;
+    const Matrix<T> dA = stage_matrix(A, sa);
+    const Vector<T> dx = stage_vector(x, sx);
+    const Vector<T> dy = stage_vector(y, sy);
+
     const int grid = (m + block - 1) / block;
     if (notrans) {
-	gemv_kernel<<<grid, block>>>(alpha, A, x, beta, y, m, n, NoTransAt<T>());
+	gemv_kernel<<<grid, block>>>(alpha, dA, dx, beta, dy, m, n, NoTransAt<T>());
     } else if (trans[0] == 'T' || trans[0] == 't') {
-	gemv_kernel<<<grid, block>>>(alpha, A, x, beta, y, m, n, TransAt<T>());
+	gemv_kernel<<<grid, block>>>(alpha, dA, dx, beta, dy, m, n, TransAt<T>());
     } else if (trans[0] == 'C' || trans[0] == 'c') {
-	gemv_kernel<<<grid, block>>>(alpha, A, x, beta, y, m, n, ConjTransAt<T>());
+	gemv_kernel<<<grid, block>>>(alpha, dA, dx, beta, dy, m, n, ConjTransAt<T>());
     }
     CUDA_ERROR_CHECK(cudaGetLastError());
+    unstage_vector(y, sy);
+    release(sx);
+    release(sa);
 }
 
 template void gemv<real_t>(const char*, real_t, const Matrix<real_t>&, const Vector<real_t>&, real_t, Vector<real_t>&);
@@ -327,14 +442,24 @@ void hemv(const char* uplo, complex_t alpha, const Matrix<complex_t>& A, const V
     int min_grid = 0, block = 0;
     GET_MAX_POTENTIAL_BLOCKS_SIZE(min_grid, block, (hemv_kernel<UpperAt<complex_t>>));
 
+    complex_t* sa = nullptr;
+    complex_t* sx = nullptr;
+    complex_t* sy = nullptr;
+    const Matrix<complex_t> dA = stage_matrix(A, sa);
+    const Vector<complex_t> dx = stage_vector(x, sx);
+    const Vector<complex_t> dy = stage_vector(y, sy);
+
     const int grid = (m + block - 1) / block;
     if (upper) {
-	hemv_kernel<<<grid, block>>>(alpha, A, x, beta, y, UpperAt<complex_t>());
+	hemv_kernel<<<grid, block>>>(alpha, dA, dx, beta, dy, UpperAt<complex_t>());
     } else {
-	hemv_kernel<<<grid, block>>>(alpha, A, x, beta, y, LowerAt<complex_t>());
+	hemv_kernel<<<grid, block>>>(alpha, dA, dx, beta, dy, LowerAt<complex_t>());
     }
 
     CUDA_ERROR_CHECK(cudaGetLastError());
+    unstage_vector(y, sy);
+    release(sx);
+    release(sa);
 }
 
 template <typename Access>
@@ -356,14 +481,24 @@ void symv(const char* uplo, real_t alpha, const Matrix<real_t>& A, const Vector<
     int min_grid = 0, block = 0;
     GET_MAX_POTENTIAL_BLOCKS_SIZE(min_grid, block, (symv_kernel<UpperAt<real_t>>));
 
+    real_t* sa = nullptr;
+    real_t* sx = nullptr;
+    real_t* sy = nullptr;
+    const Matrix<real_t> dA = stage_matrix(A, sa);
+    const Vector<real_t> dx = stage_vector(x, sx);
+    const Vector<real_t> dy = stage_vector(y, sy);
+
     const int grid = (m + block - 1) / block;
     if (upper) {
-	symv_kernel<<<grid, block>>>(alpha, A, x, beta, y, UpperAt<real_t>());
+	symv_kernel<<<grid, block>>>(alpha, dA, dx, beta, dy, UpperAt<real_t>());
     } else {
-	symv_kernel<<<grid, block>>>(alpha, A, x, beta, y, LowerAt<real_t>());
+	symv_kernel<<<grid, block>>>(alpha, dA, dx, beta, dy, LowerAt<real_t>());
     }
 
     CUDA_ERROR_CHECK(cudaGetLastError());
+    unstage_vector(y, sy);
+    release(sx);
+    release(sa);
 }
 
 template <typename T, typename AccessA, typename AccessB>
@@ -408,14 +543,24 @@ void gemm(const char* transa, const char* transb, T alpha, const Matrix<T>& A, c
     if (gy > 65535) gy = 65535;
     const dim3 grid((unsigned)gx, (unsigned)gy);
 
+    T* sa = nullptr;
+    T* sb = nullptr;
+    T* sc = nullptr;
+    const Matrix<T> dA = stage_matrix(A, sa);
+    const Matrix<T> dB = stage_matrix(B, sb);
+    Matrix<T> dC = stage_matrix(C, sc);
+
     if (na) {
-	gemm_launch(transb, alpha, A, B, beta, C, m, n, k, grid, block, NoTransAt<T>());
+	gemm_launch(transb, alpha, dA, dB, beta, dC, m, n, k, grid, block, NoTransAt<T>());
     } else if (transa[0] == 'T' || transa[0] == 't') {
-	gemm_launch(transb, alpha, A, B, beta, C, m, n, k, grid, block, TransAt<T>());
+	gemm_launch(transb, alpha, dA, dB, beta, dC, m, n, k, grid, block, TransAt<T>());
     } else if (transa[0] == 'C' || transa[0] == 'c') {
-	gemm_launch(transb, alpha, A, B, beta, C, m, n, k, grid, block, ConjTransAt<T>());
+	gemm_launch(transb, alpha, dA, dB, beta, dC, m, n, k, grid, block, ConjTransAt<T>());
     }
     CUDA_ERROR_CHECK(cudaGetLastError());
+    unstage_matrix(C, sc);
+    release(sb);
+    release(sa);
 }
 
 template void gemm<real_t>(const char*, const char*, real_t, const Matrix<real_t>&, const Matrix<real_t>&, real_t, Matrix<real_t>&);
