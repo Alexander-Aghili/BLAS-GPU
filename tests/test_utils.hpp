@@ -2,8 +2,6 @@
 
 #include <gtest/gtest.h>
 
-#include <cuda_runtime.h>
-
 #include <cmath>
 #include <random>
 #include <type_traits>
@@ -118,20 +116,16 @@ inline Matrix<T> random_matrix_hermitian(T* data, int rows, int cols) {
 template <typename T>
 inline void verify_vector(const Vector<T>& v, const std::vector<T>& expected) {
     ASSERT_EQ(static_cast<size_t>(v.n), expected.size());
-    std::vector<T> host(static_cast<size_t>(v.n) * v.inc);
-    ASSERT_EQ(cudaMemcpy(host.data(), v.data, host.size() * sizeof(T), cudaMemcpyDeviceToHost), cudaSuccess);
     for (int i = 0; i < v.n; ++i) {
-        EXPECT_EQ(host[static_cast<size_t>(i) * v.inc], expected[i]) << "mismatch at index " << i;
+        EXPECT_EQ(v.data[static_cast<long>(i) * v.inc], expected[i]) << "mismatch at index " << i;
     }
 }
 
 template <typename T>
 inline void verify_vector_near(const Vector<T>& v, const std::vector<T>& expected, real_t rel_tol) {
     ASSERT_EQ(static_cast<size_t>(v.n), expected.size());
-    std::vector<T> host(static_cast<size_t>(v.n) * v.inc);
-    ASSERT_EQ(cudaMemcpy(host.data(), v.data, host.size() * sizeof(T), cudaMemcpyDeviceToHost), cudaSuccess);
     for (int i = 0; i < v.n; ++i) {
-        const T& got = host[static_cast<size_t>(i) * v.inc];
+        const T& got = v.data[static_cast<long>(i) * v.inc];
         const T& want = expected[i];
         if constexpr (std::is_same_v<T, complex_t>) {
             const real_t tol = abs(want) * rel_tol;
