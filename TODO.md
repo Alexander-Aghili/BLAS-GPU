@@ -6,24 +6,17 @@
 - [x] copy, swap
 - [x] dot, dotu, dotc (atomicAdd first pass)
 - [x] nrm2 (atomicAdd sum of squares, sqrt on host)
-- [ ] asum
+- [x] asum
 - [ ] reduction skeleton (block reduction + one atomic per block) — replace per-element atomicAdd in dot/dotu/dotc/nrm2/asum
 - [ ] iamax (reduction with index tracking)
-- [ ] rotg, rot, rotmg, rotm
 
 ## Level 2
-- [ ] gemv (N/T/C)
-- [ ] ger, geru, gerc
-- [ ] symv, hemv
-- [ ] syr, her, syr2, her2
-- [ ] trmv, trsv
-- [ ] band storage type + gbmv, sbmv, tbmv, tbsv (later)
+- [x] gemv (N/T/C)
+- [x] symv, hemv
+- [ ] trmv
 
 ## Level 3
-- [ ] gemm
-- [ ] symm, hemm
-- [ ] syrk, herk, syr2k, her2k
-- [ ] trmm, trsm
+- [x] gemm (naive first pass)
 - [ ] gemmtr
 
 ## Optimizations to look into
