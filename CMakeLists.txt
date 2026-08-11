@@ -19,6 +19,8 @@ add_library(blas_lib STATIC
 
 target_include_directories(blas_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
+target_compile_options(blas_lib PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>)
+
 target_link_libraries(blas_lib PUBLIC CUDA::cudart)
 
 add_executable(blas
@@ -30,6 +32,12 @@ target_link_libraries(blas PRIVATE
   blas_lib
   CUDA::cublas
 )
+
+add_executable(bench
+  bench.cu
+)
+
+target_link_libraries(bench PRIVATE blas_lib)
 
 enable_testing()
 add_subdirectory(tests)
