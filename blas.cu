@@ -170,10 +170,9 @@ __global__ void dot_kernel(const Vector x, const Vector y, real_t* result) {
     sdata[tid] = sum;
     __syncthreads();
 
-    for (unsigned int s = 1; s < blockDim.x; s *= 2) {
-	int index = 2 * s * tid;
-	if (index < blockDim.x) {
-	    sdata[index] += sdata[index + s];
+    for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1) {
+	if (tid < s) {
+	    sdata[tid] += sdata[tid + s];
 	}
 	__syncthreads();
     }
