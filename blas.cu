@@ -190,7 +190,7 @@ real_t dot(const Vector& x, const Vector& y) {
     const Vector dx = stage_vector(x, sx);
     const Vector dy = stage_vector(y, sy);
 
-    const int grid = (x.n + DOT_BLOCK_SIZE - 1) / DOT_BLOCK_SIZE;
+    const int grid = (x.n + 2L * DOT_BLOCK_SIZE - 1) / (2L * DOT_BLOCK_SIZE);
     real_t* d_result = nullptr;
     CUDA_ERROR_CHECK(cudaMalloc(&d_result, sizeof(real_t)));
     CUDA_ERROR_CHECK(cudaMemset(d_result, 0, sizeof(real_t)));
