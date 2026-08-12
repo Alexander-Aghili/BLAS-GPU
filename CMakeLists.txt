@@ -37,7 +37,7 @@ add_executable(bench
   bench.cu
 )
 
-target_link_libraries(bench PRIVATE blas_lib)
+target_link_libraries(bench PRIVATE blas_lib CUDA::cublas)
 
 enable_testing()
 add_subdirectory(tests)

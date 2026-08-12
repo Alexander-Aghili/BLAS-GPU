@@ -15,7 +15,7 @@ if grep -q "RmProfilingAdminOnly: 1" /proc/driver/nvidia/params 2>/dev/null; the
     ncu_cmd=(sudo /usr/local/cuda/bin/ncu)
 fi
 
-"${ncu_cmd[@]}" --kernel-name "regex:${kernel}" --launch-skip 1 --launch-count 3 --set full -o "$out" ./build/bench
+"${ncu_cmd[@]}" --kernel-name "regex:${kernel}" --launch-skip 1 --launch-count 7 --set full -o "$out" ./build/bench
 
 echo
 echo "report written: ${out}.ncu-rep"
