@@ -10,9 +10,9 @@ A BLAS implementation in CUDA, written from scratch.
 
 ## Scope
 
-- Levels 1-3, real and complex, following the BLAS spec
+- Levels 1-3, real only, following the BLAS spec
 - Precision (float/double) set at compile time via `real_t`
-- Verified against cuBLAS
+- Verified against the Netlib reference BLAS
 
 ## Build
 
