@@ -160,25 +160,32 @@ void swap(Vector& x, Vector& y) {
 __global__ void dot_kernel(const Vector x, const Vector y, real_t* result) {
     const real_t* __restrict__ xp = x.data;
     const real_t* __restrict__ yp = y.data;
-    __shared__ real_t sdata[DOT_BLOCK_SIZE];
-    unsigned int tid = threadIdx.x;
+    __shared__ real_t sdata[DOT_BLOCK_SIZE / 32];
+    unsigned int warp = threadIdx.x / 32;
+    unsigned int lane = threadIdx.x % 32;
     
     real_t sum = 0;
     for (long i = blockIdx.x * (long)blockDim.x + threadIdx.x; i < x.n; i += (long)gridDim.x * blockDim.x) {
 	sum += xp[i * x.inc] * yp[i * y.inc];
     }
-    sdata[tid] = sum;
+    sum += __shfl_down_sync(0xffffffff, sum, 16);
+    sum += __shfl_down_sync(0xffffffff, sum, 8);
+    sum += __shfl_down_sync(0xffffffff, sum, 4);
+    sum += __shfl_down_sync(0xffffffff, sum, 2);
+    sum += __shfl_down_sync(0xffffffff, sum, 1);
+    if (lane == 0)
+	sdata[warp] = sum;
     __syncthreads();
 
-    for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1) {
-	if (tid < s) {
-	    sdata[tid] += sdata[tid + s];
-	}
-	__syncthreads();
-    }
-
-    if (tid == 0) {
-	atomicAdd(result, sdata[0]);
+    if (warp == 0) {
+	sum = lane < DOT_BLOCK_SIZE / 32 ? sdata[lane] : 0;
+	sum += __shfl_down_sync(0xffffffff, sum, 16);
+	sum += __shfl_down_sync(0xffffffff, sum, 8);
+	sum += __shfl_down_sync(0xffffffff, sum, 4);
+	sum += __shfl_down_sync(0xffffffff, sum, 2);
+	sum += __shfl_down_sync(0xffffffff, sum, 1);
+	if (lane == 0)
+	    atomicAdd(result, sum);
     }
 }
 
