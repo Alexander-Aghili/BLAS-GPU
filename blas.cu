@@ -7,7 +7,7 @@
 #define GEMV_ROWS 32
 #define GEMV_SPLITS 16
 #define GEMM_TILE 16
-#define GEMM_THREAD_TILE 4
+#define GEMM_THREAD_TILE 8
 #define GEMM_BLOCK_TILE (GEMM_TILE * GEMM_THREAD_TILE)
 
 static long span_of(int n, int inc) {
