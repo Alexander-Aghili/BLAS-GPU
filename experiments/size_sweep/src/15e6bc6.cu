@@ -6,22 +6,6 @@
 #define GEMV_BLOCK_SIZE BLOCK_SIZE
 #define GEMV_ROWS 32
 #define GEMV_SPLITS 16
-#ifndef GEMM_TILE
-#define GEMM_TILE 16
-#endif
-#ifndef GEMM_K_TILE
-// Keep static shared storage below the per-block 48 KiB limit in FP64.
-#ifdef DOUBLE_PRECISION
-#define GEMM_K_TILE 8
-#else
-#define GEMM_K_TILE 16
-#endif
-#endif
-#define GEMM_LOADS (GEMM_K_TILE * GEMM_BLOCK_TILE / (GEMM_TILE * GEMM_TILE))
-#define GEMM_THREAD_TILE 8
-#define GEMM_BLOCK_TILE (GEMM_TILE * GEMM_THREAD_TILE)
-static_assert(GEMM_K_TILE * GEMM_BLOCK_TILE % (GEMM_TILE * GEMM_TILE) == 0,
-              "GEMM tile loads must divide evenly across the block");
 
 static long span_of(int n, int inc) {
     return n > 0 ? 1 + (long)(n - 1) * (inc < 0 ? -inc : inc) : 0;
@@ -389,68 +373,14 @@ void symv(const char* uplo, real_t alpha, const Matrix& A, const Vector& x, real
 
 template <typename AccessA, typename AccessB>
 __global__ void gemm_kernel(real_t alpha, const Matrix A, const Matrix B, real_t beta, Matrix C, long m, long n, long k, AccessA at_a, AccessB at_b) {
-    __shared__ real_t as[2][GEMM_K_TILE][GEMM_BLOCK_TILE];
-    __shared__ real_t bs[2][GEMM_BLOCK_TILE][GEMM_K_TILE];
     real_t* __restrict__ cp = C.data;
-    const int tid = threadIdx.y * GEMM_TILE + threadIdx.x;
-    for (long ib = blockIdx.x * (long)GEMM_BLOCK_TILE; ib < m; ib += (long)gridDim.x * GEMM_BLOCK_TILE) {
-	for (long jb = blockIdx.y * (long)GEMM_BLOCK_TILE; jb < n; jb += (long)gridDim.y * GEMM_BLOCK_TILE) {
-	    real_t acc[GEMM_THREAD_TILE][GEMM_THREAD_TILE] = {};
-	    for (int q = 0; q < GEMM_LOADS; q++) {
-		const int e = tid + q * GEMM_TILE * GEMM_TILE;
-		const int ar = e % GEMM_BLOCK_TILE;
-		const int ak = e / GEMM_BLOCK_TILE;
-		as[0][ak][ar] = (ib + ar < m && ak < k) ? at_a(A, ib + ar, ak) : real_t(0);
-		const int bk = e % GEMM_K_TILE;
-		const int bc = e / GEMM_K_TILE;
-		bs[0][bc][bk] = (bk < k && jb + bc < n) ? at_b(B, bk, jb + bc) : real_t(0);
+    for (long i = blockIdx.x * (long)blockDim.x + threadIdx.x; i < m; i += (long)gridDim.x * blockDim.x) {
+	for (long j = blockIdx.y * (long)blockDim.y + threadIdx.y; j < n; j += (long)gridDim.y * blockDim.y) {
+	    real_t sum = 0;
+	    for (long l = 0; l < k; l++) {
+		sum += at_a(A, i, l) * at_b(B, l, j);
 	    }
-	    __syncthreads();
-	    int buf = 0;
-	    for (long t = 0; t < k; t += GEMM_K_TILE) {
-		const long tn = t + GEMM_K_TILE;
-		real_t pa[GEMM_LOADS];
-		real_t pb[GEMM_LOADS];
-		if (tn < k) {
-		    for (int q = 0; q < GEMM_LOADS; q++) {
-			const int e = tid + q * GEMM_TILE * GEMM_TILE;
-			const int ar = e % GEMM_BLOCK_TILE;
-			const int ak = e / GEMM_BLOCK_TILE;
-			pa[q] = (ib + ar < m && tn + ak < k) ? at_a(A, ib + ar, tn + ak) : real_t(0);
-			const int bk = e % GEMM_K_TILE;
-			const int bc = e / GEMM_K_TILE;
-			pb[q] = (tn + bk < k && jb + bc < n) ? at_b(B, tn + bk, jb + bc) : real_t(0);
-		    }
-		}
-		for (int l = 0; l < GEMM_K_TILE; l++) {
-		    real_t ra[GEMM_THREAD_TILE];
-		    real_t rb[GEMM_THREAD_TILE];
-		    for (int u = 0; u < GEMM_THREAD_TILE; u++)
-			ra[u] = as[buf][l][threadIdx.x + u * GEMM_TILE];
-		    for (int v = 0; v < GEMM_THREAD_TILE; v++)
-			rb[v] = bs[buf][threadIdx.y + v * GEMM_TILE][l];
-		    for (int u = 0; u < GEMM_THREAD_TILE; u++)
-			for (int v = 0; v < GEMM_THREAD_TILE; v++)
-			    acc[u][v] += ra[u] * rb[v];
-		}
-		if (tn < k) {
-		    for (int q = 0; q < GEMM_LOADS; q++) {
-			const int e = tid + q * GEMM_TILE * GEMM_TILE;
-			as[buf ^ 1][e / GEMM_BLOCK_TILE][e % GEMM_BLOCK_TILE] = pa[q];
-			bs[buf ^ 1][e / GEMM_K_TILE][e % GEMM_K_TILE] = pb[q];
-		    }
-		    buf ^= 1;
-		}
-		__syncthreads();
-	    }
-	    for (int u = 0; u < GEMM_THREAD_TILE; u++) {
-		const long i = ib + threadIdx.x + u * GEMM_TILE;
-		for (int v = 0; v < GEMM_THREAD_TILE; v++) {
-		    const long j = jb + threadIdx.y + v * GEMM_TILE;
-		    if (i < m && j < n)
-			cp[i + j * C.ld] = alpha * acc[u][v] + (beta == real_t(0) ? real_t(0) : beta * cp[i + j * C.ld]);
-		}
-	    }
+	    cp[i + j * C.ld] = alpha * sum + (beta == real_t(0) ? real_t(0) : beta * cp[i + j * C.ld]);
 	}
     }
 }
@@ -472,9 +402,9 @@ void gemm(const char* transa, const char* transb, real_t alpha, const Matrix& A,
 
     if (m <= 0 || n <= 0 || (alpha == real_t(0) && beta == real_t(1))) return;
 
-    const dim3 block(GEMM_TILE, GEMM_TILE);
-    long gx = (m + GEMM_BLOCK_TILE - 1) / GEMM_BLOCK_TILE;
-    long gy = (n + GEMM_BLOCK_TILE - 1) / GEMM_BLOCK_TILE;
+    const dim3 block(16, 16);
+    long gx = (m + block.x - 1) / block.x;
+    long gy = (n + block.y - 1) / block.y;
     //temporary cap on grid size
     if (gx > 65535) gx = 65535;
     if (gy > 65535) gy = 65535;

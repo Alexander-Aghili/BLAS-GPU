@@ -1,0 +1,2 @@
+name, driver_version, clocks.current.sm [MHz], clocks.current.memory [MHz], temperature.gpu, power.draw [W], pstate, clocks_event_reasons.active
+NVIDIA GeForce RTX 4060 Laptop GPU, 595.84, 1620 MHz, 7001 MHz, 67, 14.36 W, P3, 0x0000000000000001

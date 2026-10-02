@@ -2,27 +2,6 @@
 
 #include <cmath>
 
-#define BLOCK_SIZE 256
-#define GEMV_BLOCK_SIZE BLOCK_SIZE
-#define GEMV_ROWS 32
-#define GEMV_SPLITS 16
-#ifndef GEMM_TILE
-#define GEMM_TILE 16
-#endif
-#ifndef GEMM_K_TILE
-// Keep static shared storage below the per-block 48 KiB limit in FP64.
-#ifdef DOUBLE_PRECISION
-#define GEMM_K_TILE 8
-#else
-#define GEMM_K_TILE 16
-#endif
-#endif
-#define GEMM_LOADS (GEMM_K_TILE * GEMM_BLOCK_TILE / (GEMM_TILE * GEMM_TILE))
-#define GEMM_THREAD_TILE 8
-#define GEMM_BLOCK_TILE (GEMM_TILE * GEMM_THREAD_TILE)
-static_assert(GEMM_K_TILE * GEMM_BLOCK_TILE % (GEMM_TILE * GEMM_TILE) == 0,
-              "GEMM tile loads must divide evenly across the block");
-
 static long span_of(int n, int inc) {
     return n > 0 ? 1 + (long)(n - 1) * (inc < 0 ? -inc : inc) : 0;
 }
@@ -179,48 +158,27 @@ void swap(Vector& x, Vector& y) {
 __global__ void dot_kernel(const Vector x, const Vector y, real_t* result) {
     const real_t* __restrict__ xp = x.data;
     const real_t* __restrict__ yp = y.data;
-    __shared__ real_t sdata[BLOCK_SIZE / 32];
-    unsigned int warp = threadIdx.x / 32;
-    unsigned int lane = threadIdx.x % 32;
-    
-    real_t sum = 0;
-    for (long i = blockIdx.x * (long)blockDim.x + threadIdx.x; i < x.n; i += (long)gridDim.x * blockDim.x) {
-	sum += xp[i * x.inc] * yp[i * y.inc];
-    }
-    sum += __shfl_down_sync(0xffffffff, sum, 16);
-    sum += __shfl_down_sync(0xffffffff, sum, 8);
-    sum += __shfl_down_sync(0xffffffff, sum, 4);
-    sum += __shfl_down_sync(0xffffffff, sum, 2);
-    sum += __shfl_down_sync(0xffffffff, sum, 1);
-    if (lane == 0)
-	sdata[warp] = sum;
-    __syncthreads();
-
-    if (warp == 0) {
-	sum = lane < BLOCK_SIZE / 32 ? sdata[lane] : 0;
-	sum += __shfl_down_sync(0xffffffff, sum, 16);
-	sum += __shfl_down_sync(0xffffffff, sum, 8);
-	sum += __shfl_down_sync(0xffffffff, sum, 4);
-	sum += __shfl_down_sync(0xffffffff, sum, 2);
-	sum += __shfl_down_sync(0xffffffff, sum, 1);
-	if (lane == 0)
-	    atomicAdd(result, sum);
+    for (long i = blockIdx.x * (long)blockDim.x + threadIdx.x; i < x.n; i+= (long)gridDim.x * blockDim.x) {
+	atomicAdd(result, xp[i * x.inc] * yp[i * y.inc]);
     }
 }
 
 real_t dot(const Vector& x, const Vector& y) {
     if (x.n <= 0 || y.n <= 0) return 0;
 
+    int min_grid = 0, block = 0;
+    GET_MAX_POTENTIAL_BLOCKS_SIZE(min_grid, block, dot_kernel);
+
     real_t* sx = nullptr;
     real_t* sy = nullptr;
     const Vector dx = stage_vector(x, sx);
     const Vector dy = stage_vector(y, sy);
 
-    const int grid = (x.n + 2L * BLOCK_SIZE - 1) / (2L * BLOCK_SIZE);
+    const int grid = (x.n + block - 1) / block;
     real_t* d_result = nullptr;
     CUDA_ERROR_CHECK(cudaMalloc(&d_result, sizeof(real_t)));
     CUDA_ERROR_CHECK(cudaMemset(d_result, 0, sizeof(real_t)));
-    dot_kernel<<<grid, BLOCK_SIZE>>>(dx, dy, d_result);
+    dot_kernel<<<grid, block>>>(dx, dy, d_result);
     CUDA_ERROR_CHECK(cudaGetLastError());
     real_t result = 0;
     CUDA_ERROR_CHECK(cudaMemcpy(&result, d_result, sizeof(real_t), cudaMemcpyDeviceToHost));
@@ -293,32 +251,20 @@ real_t asum(const Vector& x) {
 
 
 template <typename Access>
-__device__ real_t row_dot(const Matrix& A, const Vector& x, long i, long c0, long c1, Access at)
+__device__ real_t row_dot(const Matrix& A, const Vector& x, long i, long len, Access at)
 {
   real_t sum = 0;
-  for (long j = c0; j < c1; j++)
+  for (long j = 0; j < len; j++)
       sum += at(A, i, j) * x.data[j * x.inc];
   return sum;
 }
 
 template <typename Access>
 __global__ void gemv_kernel(real_t alpha, const Matrix A, const Vector x, real_t beta, Vector y, long m, long n, Access at) {
-    __shared__ real_t partial[GEMV_SPLITS][GEMV_ROWS];
     real_t* __restrict__ yp = y.data;
-    const long chunk = (n + GEMV_SPLITS - 1) / GEMV_SPLITS;
-    const long c0 = threadIdx.y * chunk;
-    const long c1 = (c0 + chunk < n) ? c0 + chunk : n;
-    for (long base = blockIdx.x * (long)GEMV_ROWS; base < m; base += (long)gridDim.x * GEMV_ROWS) {
-	const long i = base + threadIdx.x;
-	partial[threadIdx.y][threadIdx.x] = (i < m) ? row_dot(A, x, i, c0, c1, at) : real_t(0);
-	__syncthreads();
-	if (threadIdx.y == 0 && i < m) {
-	    real_t sum = 0;
-	    for (int t = 0; t < GEMV_SPLITS; t++)
-		sum += partial[t][threadIdx.x];
-	    yp[i * y.inc] = alpha * sum + (beta == real_t(0) ? real_t(0) : beta * yp[i * y.inc]);
-	}
-	__syncthreads();
+    for (long i = blockIdx.x * (long)blockDim.x + threadIdx.x; i < m; i+= (long)gridDim.x * blockDim.x) {
+	real_t sum = row_dot(A, x, i, n, at);
+	yp[i * y.inc] = alpha * sum + (beta == real_t(0) ? real_t(0) : beta * yp[i * y.inc]);
     }
 }
 
@@ -330,6 +276,8 @@ void gemv(const char* trans, real_t alpha, const Matrix& A, const Vector& x, rea
     const long m = notrans ? A.rows : A.cols;
     const long n = notrans ? A.cols : A.rows;
 
+    int min_grid = 0, block = 0;
+    GET_MAX_POTENTIAL_BLOCKS_SIZE(min_grid, block, (gemv_kernel<NoTransAt>));
 
     real_t* sa = nullptr;
     real_t* sx = nullptr;
@@ -338,8 +286,7 @@ void gemv(const char* trans, real_t alpha, const Matrix& A, const Vector& x, rea
     const Vector dx = stage_vector(x, sx);
     const Vector dy = stage_vector(y, sy);
 
-    const dim3 block(GEMV_ROWS, GEMV_SPLITS);
-    const int grid = (m + GEMV_ROWS - 1) / GEMV_ROWS;
+    const int grid = (m + block - 1) / block;
     if (notrans) {
 	gemv_kernel<<<grid, block>>>(alpha, dA, dx, beta, dy, m, n, NoTransAt());
     } else {
@@ -355,7 +302,7 @@ template <typename Access>
 __global__ void symv_kernel(real_t alpha, const Matrix A, const Vector x, real_t beta, const Vector y, Access at) {
     real_t* __restrict__ yp = y.data;
     for (long i = blockIdx.x * (long)blockDim.x + threadIdx.x; i < A.rows; i+= (long)gridDim.x * blockDim.x) {
-	real_t sum = row_dot(A, x, i, 0, A.cols, at);
+	real_t sum = row_dot(A, x, i, A.cols, at);
 	yp[i * y.inc] = alpha * sum + (beta == real_t(0) ? real_t(0) : beta * yp[i * y.inc]);
     }
 }
@@ -367,6 +314,9 @@ void symv(const char* uplo, real_t alpha, const Matrix& A, const Vector& x, real
     const long m = upper ? A.rows : A.cols;
     const long n = upper ? A.cols : A.rows;
 
+    int min_grid = 0, block = 0;
+    GET_MAX_POTENTIAL_BLOCKS_SIZE(min_grid, block, (symv_kernel<UpperAt>));
+
     real_t* sa = nullptr;
     real_t* sx = nullptr;
     real_t* sy = nullptr;
@@ -374,11 +324,11 @@ void symv(const char* uplo, real_t alpha, const Matrix& A, const Vector& x, real
     const Vector dx = stage_vector(x, sx);
     const Vector dy = stage_vector(y, sy);
 
-    const int grid = 512;
+    const int grid = (m + block - 1) / block;
     if (upper) {
-	symv_kernel<<<grid, GEMV_BLOCK_SIZE>>>(alpha, dA, dx, beta, dy, UpperAt());
+	symv_kernel<<<grid, block>>>(alpha, dA, dx, beta, dy, UpperAt());
     } else {
-	symv_kernel<<<grid, GEMV_BLOCK_SIZE>>>(alpha, dA, dx, beta, dy, LowerAt());
+	symv_kernel<<<grid, block>>>(alpha, dA, dx, beta, dy, LowerAt());
     }
 
     CUDA_ERROR_CHECK(cudaGetLastError());
@@ -389,68 +339,14 @@ void symv(const char* uplo, real_t alpha, const Matrix& A, const Vector& x, real
 
 template <typename AccessA, typename AccessB>
 __global__ void gemm_kernel(real_t alpha, const Matrix A, const Matrix B, real_t beta, Matrix C, long m, long n, long k, AccessA at_a, AccessB at_b) {
-    __shared__ real_t as[2][GEMM_K_TILE][GEMM_BLOCK_TILE];
-    __shared__ real_t bs[2][GEMM_BLOCK_TILE][GEMM_K_TILE];
     real_t* __restrict__ cp = C.data;
-    const int tid = threadIdx.y * GEMM_TILE + threadIdx.x;
-    for (long ib = blockIdx.x * (long)GEMM_BLOCK_TILE; ib < m; ib += (long)gridDim.x * GEMM_BLOCK_TILE) {
-	for (long jb = blockIdx.y * (long)GEMM_BLOCK_TILE; jb < n; jb += (long)gridDim.y * GEMM_BLOCK_TILE) {
-	    real_t acc[GEMM_THREAD_TILE][GEMM_THREAD_TILE] = {};
-	    for (int q = 0; q < GEMM_LOADS; q++) {
-		const int e = tid + q * GEMM_TILE * GEMM_TILE;
-		const int ar = e % GEMM_BLOCK_TILE;
-		const int ak = e / GEMM_BLOCK_TILE;
-		as[0][ak][ar] = (ib + ar < m && ak < k) ? at_a(A, ib + ar, ak) : real_t(0);
-		const int bk = e % GEMM_K_TILE;
-		const int bc = e / GEMM_K_TILE;
-		bs[0][bc][bk] = (bk < k && jb + bc < n) ? at_b(B, bk, jb + bc) : real_t(0);
+    for (long i = blockIdx.x * (long)blockDim.x + threadIdx.x; i < m; i += (long)gridDim.x * blockDim.x) {
+	for (long j = blockIdx.y * (long)blockDim.y + threadIdx.y; j < n; j += (long)gridDim.y * blockDim.y) {
+	    real_t sum = 0;
+	    for (long l = 0; l < k; l++) {
+		sum += at_a(A, i, l) * at_b(B, l, j);
 	    }
-	    __syncthreads();
-	    int buf = 0;
-	    for (long t = 0; t < k; t += GEMM_K_TILE) {
-		const long tn = t + GEMM_K_TILE;
-		real_t pa[GEMM_LOADS];
-		real_t pb[GEMM_LOADS];
-		if (tn < k) {
-		    for (int q = 0; q < GEMM_LOADS; q++) {
-			const int e = tid + q * GEMM_TILE * GEMM_TILE;
-			const int ar = e % GEMM_BLOCK_TILE;
-			const int ak = e / GEMM_BLOCK_TILE;
-			pa[q] = (ib + ar < m && tn + ak < k) ? at_a(A, ib + ar, tn + ak) : real_t(0);
-			const int bk = e % GEMM_K_TILE;
-			const int bc = e / GEMM_K_TILE;
-			pb[q] = (tn + bk < k && jb + bc < n) ? at_b(B, tn + bk, jb + bc) : real_t(0);
-		    }
-		}
-		for (int l = 0; l < GEMM_K_TILE; l++) {
-		    real_t ra[GEMM_THREAD_TILE];
-		    real_t rb[GEMM_THREAD_TILE];
-		    for (int u = 0; u < GEMM_THREAD_TILE; u++)
-			ra[u] = as[buf][l][threadIdx.x + u * GEMM_TILE];
-		    for (int v = 0; v < GEMM_THREAD_TILE; v++)
-			rb[v] = bs[buf][threadIdx.y + v * GEMM_TILE][l];
-		    for (int u = 0; u < GEMM_THREAD_TILE; u++)
-			for (int v = 0; v < GEMM_THREAD_TILE; v++)
-			    acc[u][v] += ra[u] * rb[v];
-		}
-		if (tn < k) {
-		    for (int q = 0; q < GEMM_LOADS; q++) {
-			const int e = tid + q * GEMM_TILE * GEMM_TILE;
-			as[buf ^ 1][e / GEMM_BLOCK_TILE][e % GEMM_BLOCK_TILE] = pa[q];
-			bs[buf ^ 1][e / GEMM_K_TILE][e % GEMM_K_TILE] = pb[q];
-		    }
-		    buf ^= 1;
-		}
-		__syncthreads();
-	    }
-	    for (int u = 0; u < GEMM_THREAD_TILE; u++) {
-		const long i = ib + threadIdx.x + u * GEMM_TILE;
-		for (int v = 0; v < GEMM_THREAD_TILE; v++) {
-		    const long j = jb + threadIdx.y + v * GEMM_TILE;
-		    if (i < m && j < n)
-			cp[i + j * C.ld] = alpha * acc[u][v] + (beta == real_t(0) ? real_t(0) : beta * cp[i + j * C.ld]);
-		}
-	    }
+	    cp[i + j * C.ld] = alpha * sum + (beta == real_t(0) ? real_t(0) : beta * cp[i + j * C.ld]);
 	}
     }
 }
@@ -472,9 +368,9 @@ void gemm(const char* transa, const char* transb, real_t alpha, const Matrix& A,
 
     if (m <= 0 || n <= 0 || (alpha == real_t(0) && beta == real_t(1))) return;
 
-    const dim3 block(GEMM_TILE, GEMM_TILE);
-    long gx = (m + GEMM_BLOCK_TILE - 1) / GEMM_BLOCK_TILE;
-    long gy = (n + GEMM_BLOCK_TILE - 1) / GEMM_BLOCK_TILE;
+    const dim3 block(16, 16);
+    long gx = (m + block.x - 1) / block.x;
+    long gy = (n + block.y - 1) / block.y;
     //temporary cap on grid size
     if (gx > 65535) gx = 65535;
     if (gy > 65535) gy = 65535;
